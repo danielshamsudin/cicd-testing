@@ -1,0 +1,112 @@
+name: Smart Terraform Pipeline
+
+on: # condition to run CI/CD
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Path Filter
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            global:
+              - 'global/**'
+            payment-api:
+              - 'apps/payment-api/**'
+            user-api:
+              - 'apps/user-api/**'
+            changelog:
+              - 'CHANGELOG.md'
+
+      - name: Set Matrix
+        id: set-matrix
+        run: |
+          CHANGES=$(echo '${{ steps.filter.outputs.changes }}')
+          echo "Detected changes: $CHANGES"
+          
+          MATRIX_JSON="[]"
+
+          if echo "$CHANGES" | grep -q "global"; then
+            echo "Global changes detected. Running ALL apps."
+            MATRIX_JSON='["payment-api", "user-api"]'
+          else
+            
+            APPS_TO_RUN=()
+            
+            if echo "$CHANGES" | grep -q "payment-api"; then
+              APPS_TO_RUN+=('"payment-api"')
+            fi
+            
+            if echo "$CHANGES" | grep -q "user-api"; then
+              APPS_TO_RUN+=('"user-api"')
+            fi
+            
+            IFS=,
+            if [ ${#APPS_TO_RUN[@]} -gt 0 ]; then
+               MATRIX_JSON="[${APPS_TO_RUN[*]}]"
+            fi
+          fi
+          
+          echo "Matrix: $MATRIX_JSON"
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+
+  terraform-plan:
+    needs: detect-changes
+    if: ${{ needs.detect-changes.outputs.matrix != '[]' && needs.detect-changes.outputs.matrix != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.app }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.7
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan -no-color -out=tfplan > plan.txt
+          terraform show -no-color tfplan > plan_show.txt
+        continue-on-error: true
+
+      - name: Publish Plan to Job Summary
+        if: always()
+        run: |
+          echo "### Terraform Plan for ${{ matrix.app }}" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Click to expand</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`terraform" >> $GITHUB_STEP_SUMMARY
+          cat plan_show.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          
+          # Propagate failure if plan failed
+          if [ "${{ steps.plan.outcome }}" == "failure" ]; then
+            echo "Terraform plan failed."
+            exit 1
+          fi
