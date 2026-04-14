@@ -1,2 +1,2 @@
-print("Learning CICD")
+print("learning python and cicd")
 
