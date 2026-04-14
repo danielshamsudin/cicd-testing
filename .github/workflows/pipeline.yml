@@ -23,9 +23,9 @@ jobs:
             global:
               - 'global/**'
             payment-api:
-              - 'apps/payment-api/**'
+              - 'modules/payment-api/**'
             user-api:
-              - 'apps/user-api/**'
+              - 'modules/user-api/**'
             changelog:
               - 'CHANGELOG.md'
 
@@ -72,7 +72,7 @@ jobs:
     
     defaults:
       run:
-        working-directory: apps/${{ matrix.app }}
+        working-directory: modules/${{ matrix.app }}
 
     steps:
       - name: Checkout
